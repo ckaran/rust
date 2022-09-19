@@ -1,5 +1,5 @@
 #![feature(box_patterns)]
-#![feature(let_else)]
+#![cfg_attr(bootstrap, feature(let_else))]
 #![feature(internal_output_capture)]
 #![feature(thread_spawn_unchecked)]
 #![feature(once_cell)]
@@ -7,6 +7,9 @@
 #![allow(rustc::potential_query_instability)]
 #![deny(rustc::untranslatable_diagnostic)]
 #![deny(rustc::diagnostic_outside_of_impl)]
+
+#[macro_use]
+extern crate tracing;
 
 mod callbacks;
 mod errors;

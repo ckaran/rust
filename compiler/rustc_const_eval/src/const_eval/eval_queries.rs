@@ -2,8 +2,8 @@ use super::{CompileTimeEvalContext, CompileTimeInterpreter, ConstEvalErr};
 use crate::interpret::eval_nullary_intrinsic;
 use crate::interpret::{
     intern_const_alloc_recursive, Allocation, ConstAlloc, ConstValue, CtfeValidationMode, GlobalId,
-    Immediate, InternKind, InterpCx, InterpResult, MPlaceTy, MemoryKind, OpTy, RefTracking,
-    ScalarMaybeUninit, StackPopCleanup,
+    Immediate, InternKind, InterpCx, InterpError, InterpResult, MPlaceTy, MemoryKind, OpTy,
+    RefTracking, StackPopCleanup,
 };
 
 use rustc_hir::def::DefKind;
@@ -74,7 +74,9 @@ fn eval_body_using_ecx<'mir, 'tcx>(
             None => InternKind::Constant,
         }
     };
+    ecx.machine.check_alignment = false; // interning doesn't need to respect alignment
     intern_const_alloc_recursive(ecx, intern_kind, &ret)?;
+    // we leave alignment checks off, since this `ecx` will not be used for further evaluation anyway
 
     debug!("eval_body_using_ecx done: {:?}", *ret);
     Ok(ret)
@@ -170,10 +172,7 @@ pub(super) fn op_to_const<'tcx>(
         // see comment on `let try_as_immediate` above
         Err(imm) => match *imm {
             _ if imm.layout.is_zst() => ConstValue::ZeroSized,
-            Immediate::Scalar(x) => match x {
-                ScalarMaybeUninit::Scalar(s) => ConstValue::Scalar(s),
-                ScalarMaybeUninit::Uninit => to_const_value(&op.assert_mem_place()),
-            },
+            Immediate::Scalar(x) => ConstValue::Scalar(x),
             Immediate::ScalarPair(a, b) => {
                 debug!("ScalarPair(a: {:?}, b: {:?})", a, b);
                 // We know `offset` is relative to the allocation, so we can use `into_parts`.
@@ -198,7 +197,7 @@ pub(super) fn op_to_const<'tcx>(
     }
 }
 
-#[instrument(skip(tcx), level = "debug")]
+#[instrument(skip(tcx), level = "debug", ret)]
 pub(crate) fn turn_into_const_value<'tcx>(
     tcx: TyCtxt<'tcx>,
     constant: ConstAlloc<'tcx>,
@@ -225,10 +224,7 @@ pub(crate) fn turn_into_const_value<'tcx>(
     );
 
     // Turn this into a proper constant.
-    let const_val = op_to_const(&ecx, &mplace.into());
-    debug!(?const_val);
-
-    const_val
+    op_to_const(&ecx, &mplace.into())
 }
 
 #[instrument(skip(tcx), level = "debug")]
@@ -388,7 +384,9 @@ pub fn eval_to_allocation_raw_provider<'tcx>(
                     ecx.tcx,
                     "it is undefined behavior to use this value",
                     |diag| {
-                        diag.note(NOTE_ON_UNDEFINED_BEHAVIOR_ERROR);
+                        if matches!(err.error, InterpError::UndefinedBehavior(_)) {
+                            diag.note(NOTE_ON_UNDEFINED_BEHAVIOR_ERROR);
+                        }
                         diag.note(&format!(
                             "the raw bytes of the constant ({}",
                             display_allocation(

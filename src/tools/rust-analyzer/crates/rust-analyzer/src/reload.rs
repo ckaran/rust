@@ -314,7 +314,9 @@ impl GlobalState {
                         let mut args = args.clone();
                         let mut path = path.clone();
 
-                        if let ProjectWorkspace::Cargo { sysroot, .. } = ws {
+                        if let ProjectWorkspace::Cargo { sysroot, .. }
+                        | ProjectWorkspace::Json { sysroot, .. } = ws
+                        {
                             tracing::debug!("Found a cargo workspace...");
                             if let Some(sysroot) = sysroot.as_ref() {
                                 tracing::debug!("Found a cargo workspace with a sysroot...");
@@ -347,8 +349,8 @@ impl GlobalState {
                             error
                         })
                     })
-                    .collect();
-            }
+                    .collect()
+            };
         }
 
         let watch = match files_config.watcher {

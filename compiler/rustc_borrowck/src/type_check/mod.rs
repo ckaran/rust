@@ -30,8 +30,9 @@ use rustc_middle::ty::cast::CastTy;
 use rustc_middle::ty::subst::{GenericArgKind, SubstsRef, UserSubsts};
 use rustc_middle::ty::visit::TypeVisitable;
 use rustc_middle::ty::{
-    self, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations, OpaqueHiddenType,
-    OpaqueTypeKey, RegionVid, ToPredicate, Ty, TyCtxt, UserType, UserTypeAnnotationIndex,
+    self, Binder, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations, Dynamic,
+    OpaqueHiddenType, OpaqueTypeKey, RegionVid, ToPredicate, Ty, TyCtxt, UserType,
+    UserTypeAnnotationIndex,
 };
 use rustc_span::def_id::CRATE_DEF_ID;
 use rustc_span::{Span, DUMMY_SP};
@@ -311,6 +312,8 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'tcx> {
     }
 
     fn visit_constant(&mut self, constant: &Constant<'tcx>, location: Location) {
+        debug!(?constant, ?location, "visit_constant");
+
         self.super_constant(constant, location);
         let ty = self.sanitize_type(constant, constant.literal.ty());
 
@@ -354,11 +357,15 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'tcx> {
             let tcx = self.tcx();
             let maybe_uneval = match constant.literal {
                 ConstantKind::Ty(ct) => match ct.kind() {
-                    ty::ConstKind::Unevaluated(uv) => Some(uv),
+                    ty::ConstKind::Unevaluated(_) => {
+                        bug!("should not encounter unevaluated ConstantKind::Ty here, got {:?}", ct)
+                    }
                     _ => None,
                 },
+                ConstantKind::Unevaluated(uv, _) => Some(uv),
                 _ => None,
             };
+
             if let Some(uv) = maybe_uneval {
                 if let Some(promoted) = uv.promoted {
                     let check_err = |verifier: &mut TypeVerifier<'a, 'b, 'tcx>,
@@ -1043,6 +1050,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             let CanonicalUserTypeAnnotation { span, ref user_ty, inferred_ty } = *user_annotation;
             let inferred_ty = self.normalize(inferred_ty, Locations::All(span));
             let annotation = self.instantiate_canonical_with_fresh_inference_vars(span, user_ty);
+            debug!(?annotation);
             match annotation {
                 UserType::Ty(mut ty) => {
                     ty = self.normalize(ty, Locations::All(span));
@@ -1301,12 +1309,13 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     );
                 }
             }
-            StatementKind::CopyNonOverlapping(box rustc_middle::mir::CopyNonOverlapping {
-                ..
-            }) => span_bug!(
-                stmt.source_info.span,
-                "Unexpected StatementKind::CopyNonOverlapping, should only appear after lowering_intrinsics",
-            ),
+            StatementKind::Intrinsic(box ref kind) => match kind {
+                NonDivergingIntrinsic::Assume(op) => self.check_operand(op, location),
+                NonDivergingIntrinsic::CopyNonOverlapping(..) => span_bug!(
+                    stmt.source_info.span,
+                    "Unexpected NonDivergingIntrinsic::CopyNonOverlapping, should only appear after lowering_intrinsics",
+                ),
+            },
             StatementKind::FakeRead(..)
             | StatementKind::StorageLive(..)
             | StatementKind::StorageDead(..)
@@ -1808,14 +1817,14 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
     }
 
     fn check_operand(&mut self, op: &Operand<'tcx>, location: Location) {
+        debug!(?op, ?location, "check_operand");
+
         if let Operand::Constant(constant) = op {
             let maybe_uneval = match constant.literal {
-                ConstantKind::Ty(ct) => match ct.kind() {
-                    ty::ConstKind::Unevaluated(uv) => Some(uv),
-                    _ => None,
-                },
-                _ => None,
+                ConstantKind::Val(..) | ConstantKind::Ty(_) => None,
+                ConstantKind::Unevaluated(uv, _) => Some(uv),
             };
+
             if let Some(uv) = maybe_uneval {
                 if uv.promoted.is_none() {
                     let tcx = self.tcx();
@@ -2002,6 +2011,36 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
 
                         self.prove_trait_ref(
                             trait_ref,
+                            location.to_locations(),
+                            ConstraintCategory::Cast,
+                        );
+                    }
+
+                    CastKind::DynStar => {
+                        // get the constraints from the target type (`dyn* Clone`)
+                        //
+                        // apply them to prove that the source type `Foo` implements `Clone` etc
+                        let (existential_predicates, region) = match ty.kind() {
+                            Dynamic(predicates, region, ty::DynStar) => (predicates, region),
+                            _ => panic!("Invalid dyn* cast_ty"),
+                        };
+
+                        let self_ty = op.ty(body, tcx);
+
+                        self.prove_predicates(
+                            existential_predicates
+                                .iter()
+                                .map(|predicate| predicate.with_self_ty(tcx, self_ty)),
+                            location.to_locations(),
+                            ConstraintCategory::Cast,
+                        );
+
+                        let outlives_predicate =
+                            tcx.mk_predicate(Binder::dummy(ty::PredicateKind::TypeOutlives(
+                                ty::OutlivesPredicate(self_ty, *region),
+                            )));
+                        self.prove_predicate(
+                            outlives_predicate,
                             location.to_locations(),
                             ConstraintCategory::Cast,
                         );
@@ -2558,7 +2597,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 .enumerate()
                 .filter_map(|(idx, constraint)| {
                     let ty::OutlivesPredicate(k1, r2) =
-                        constraint.no_bound_vars().unwrap_or_else(|| {
+                        constraint.0.no_bound_vars().unwrap_or_else(|| {
                             bug!("query_constraint {:?} contained bound vars", constraint,);
                         });
 
@@ -2633,7 +2672,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             self.check_local(&body, local, local_decl);
         }
 
-        for (block, block_data) in body.basic_blocks().iter_enumerated() {
+        for (block, block_data) in body.basic_blocks.iter_enumerated() {
             let mut location = Location { block, statement_index: 0 };
             for stmt in &block_data.statements {
                 if !stmt.source_info.span.is_dummy() {

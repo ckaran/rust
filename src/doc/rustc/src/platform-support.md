@@ -174,7 +174,7 @@ target | std | notes
 `wasm32-unknown-unknown` | ✓ | WebAssembly
 `wasm32-wasi` | ✓ | WebAssembly with WASI
 `x86_64-apple-ios` | ✓ | 64-bit x86 iOS
-`x86_64-fortanix-unknown-sgx` | ✓ | [Fortanix ABI] for 64-bit Intel SGX
+[`x86_64-fortanix-unknown-sgx`](platform-support/x86_64-fortanix-unknown-sgx.md) | ✓ | [Fortanix ABI] for 64-bit Intel SGX
 `x86_64-fuchsia` | ✓ | 64-bit Fuchsia
 `x86_64-linux-android` | ✓ | 64-bit x86 Android
 `x86_64-pc-solaris` | ✓ | 64-bit Solaris 10/11, illumos
@@ -213,7 +213,7 @@ target | std | host | notes
 [`aarch64-pc-windows-gnullvm`](platform-support/pc-windows-gnullvm.md) | ✓ | ✓ |
 `aarch64-unknown-freebsd` | ✓ | ✓ | ARM64 FreeBSD
 `aarch64-unknown-hermit` | ✓ |  | ARM64 HermitCore
-`aarch64-unknown-uefi` | * |  | ARM64 UEFI
+[`aarch64-unknown-uefi`](platform-support/unknown-uefi.md) | * |  | ARM64 UEFI
 `aarch64-unknown-linux-gnu_ilp32` | ✓ | ✓ | ARM64 Linux (ILP32 ABI)
 `aarch64-unknown-netbsd` | ✓ | ✓ |
 [`aarch64-unknown-openbsd`](platform-support/openbsd.md) | ✓ | ✓ | ARM64 OpenBSD
@@ -223,6 +223,7 @@ target | std | host | notes
 `aarch64_be-unknown-linux-gnu_ilp32` | ✓ | ✓ | ARM64 Linux (big-endian, ILP32 ABI)
 `aarch64_be-unknown-linux-gnu` | ✓ | ✓ | ARM64 Linux (big-endian)
 [`arm64_32-apple-watchos`](platform-support/apple-watchos.md) | ✓ | | ARM Apple WatchOS 64-bit with 32-bit pointers
+[`armeb-unknown-linux-gnueabi`](platform-support/armeb-unknown-linux-gnueabi.md) | ✓ | ? | ARM BE8 the default ARM big-endian architecture since [ARMv6](https://developer.arm.com/documentation/101754/0616/armlink-Reference/armlink-Command-line-Options/--be8?lang=en).
 `armv4t-none-eabi` | * |  | ARMv4T A32
 `armv4t-unknown-linux-gnueabi` | ? |  |
 `armv5te-unknown-linux-uclibceabi` | ? |  | ARMv5TE Linux with uClibc
@@ -250,7 +251,7 @@ target | std | host | notes
 `i686-unknown-haiku` | ✓ | ✓ | 32-bit Haiku
 `i686-unknown-netbsd` | ✓ | ✓ | NetBSD/i386 with SSE2
 [`i686-unknown-openbsd`](platform-support/openbsd.md) | ✓ | ✓ | 32-bit OpenBSD
-`i686-unknown-uefi` | * |  | 32-bit UEFI
+[`i686-unknown-uefi`](platform-support/unknown-uefi.md) | * |  | 32-bit UEFI
 `i686-uwp-windows-gnu` | ? |  |
 `i686-uwp-windows-msvc` | ? |  |
 `i686-wrs-vxworks` | ? |  |
@@ -277,6 +278,7 @@ target | std | host | notes
 `powerpc64-unknown-linux-musl` | ? |  |
 `powerpc64-wrs-vxworks` | ? |  |
 `powerpc64le-unknown-linux-musl` | ? |  |
+[`powerpc64-unknown-openbsd`](platform-support/openbsd.md) | ✓ | ✓ | OpenBSD/powerpc64
 `riscv32gc-unknown-linux-gnu` |   |   | RISC-V Linux (kernel 5.4, glibc 2.33)
 `riscv32gc-unknown-linux-musl` |   |   | RISC-V Linux (kernel 5.4, musl + RISCV32 support patches)
 `riscv32im-unknown-none-elf` | * |  | Bare RISC-V (RV32IM ISA)
@@ -284,6 +286,7 @@ target | std | host | notes
 `riscv32imc-esp-espidf` | ✓ |  | RISC-V ESP-IDF
 `riscv64gc-unknown-freebsd` |   |   | RISC-V FreeBSD
 `riscv64gc-unknown-linux-musl` |   |   | RISC-V Linux (kernel 4.20, musl 1.2.0)
+[`riscv64gc-unknown-openbsd`](platform-support/openbsd.md) | ✓ | ✓ | OpenBSD/riscv64
 `s390x-unknown-linux-musl` |  |  | S390x Linux (kernel 3.2, MUSL)
 `sparc-unknown-linux-gnu` | ✓ |  | 32-bit SPARC Linux
 `sparc64-unknown-netbsd` | ✓ | ✓ | NetBSD/sparc64
@@ -305,7 +308,7 @@ target | std | host | notes
 `x86_64-unknown-l4re-uclibc` | ? |  |
 `x86_64-unknown-none-linuxkernel` | * |  | Linux kernel modules
 [`x86_64-unknown-openbsd`](platform-support/openbsd.md) | ✓ | ✓ | 64-bit OpenBSD
-`x86_64-unknown-uefi` | * |  | 64-bit UEFI
+[`x86_64-unknown-uefi`](platform-support/unknown-uefi.md) | * |  | 64-bit UEFI
 `x86_64-uwp-windows-gnu` | ✓ |  |
 `x86_64-uwp-windows-msvc` | ✓ |  |
 `x86_64-wrs-vxworks` | ? |  |

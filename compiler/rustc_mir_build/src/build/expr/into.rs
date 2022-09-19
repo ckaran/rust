@@ -366,9 +366,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                             None => {
                                 let place_builder = place_builder.clone();
                                 this.consume_by_copy_or_move(
-                                    place_builder
-                                        .field(n, *ty)
-                                        .into_place(this.tcx, this.typeck_results),
+                                    place_builder.field(n, *ty).into_place(this.tcx, &this.upvars),
                                 )
                             }
                         })
@@ -378,10 +376,10 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 };
 
                 let inferred_ty = expr.ty;
-                let user_ty = user_ty.as_ref().map(|box user_ty| {
+                let user_ty = user_ty.as_ref().map(|user_ty| {
                     this.canonical_user_type_annotations.push(CanonicalUserTypeAnnotation {
                         span: source_info.span,
-                        user_ty: *user_ty,
+                        user_ty: user_ty.clone(),
                         inferred_ty,
                     })
                 });

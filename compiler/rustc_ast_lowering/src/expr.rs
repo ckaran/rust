@@ -1,18 +1,23 @@
+use super::errors::{
+    AsyncGeneratorsNotSupported, AsyncNonMoveClosureNotSupported, AwaitOnlyInAsyncFnAndBlocks,
+    BaseExpressionDoubleDot, ClosureCannotBeStatic, FunctionalRecordUpdateDestructuringAssignemnt,
+    GeneratorTooManyParameters, InclusiveRangeWithNoEnd, NotSupportedForLifetimeBinderAsyncClosure,
+    RustcBoxAttributeError, UnderscoreExprLhsAssign,
+};
 use super::ResolverAstLoweringExt;
 use super::{ImplTraitContext, LoweringContext, ParamMode, ParenthesizedGenericArgs};
 use crate::{FnDeclKind, ImplTraitPosition};
-
 use rustc_ast::attr;
 use rustc_ast::ptr::P as AstP;
 use rustc_ast::*;
 use rustc_data_structures::stack::ensure_sufficient_stack;
-use rustc_errors::struct_span_err;
 use rustc_hir as hir;
 use rustc_hir::def::Res;
 use rustc_hir::definitions::DefPathData;
 use rustc_span::source_map::{respan, DesugaringKind, Span, Spanned};
 use rustc_span::symbol::{sym, Ident};
 use rustc_span::DUMMY_SP;
+use thin_vec::thin_vec;
 
 impl<'hir> LoweringContext<'_, 'hir> {
     fn lower_exprs(&mut self, exprs: &[AstP<Expr>]) -> &'hir [hir::Expr<'hir>] {
@@ -45,13 +50,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                             let hir_id = self.lower_node_id(e.id);
                             return hir::Expr { hir_id, kind, span: self.lower_span(e.span) };
                         } else {
-                            self.tcx.sess
-                                .struct_span_err(
-                                    e.span,
-                                    "#[rustc_box] requires precisely one argument \
-                                    and no other attributes are allowed",
-                                )
-                                .emit();
+                            self.tcx.sess.emit_err(RustcBoxAttributeError { span: e.span });
                             hir::ExprKind::Err
                         }
                     } else if let Some(legacy_args) = self.resolver.legacy_const_generic_args(f) {
@@ -67,12 +66,12 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         seg,
                         ParamMode::Optional,
                         ParenthesizedGenericArgs::Err,
-                        ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                        &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
                     ));
-                    let args = self.arena.alloc_from_iter(
-                        [&*receiver].into_iter().chain(args.iter()).map(|x| self.lower_expr_mut(x)),
-                    );
-                    hir::ExprKind::MethodCall(hir_seg, args, self.lower_span(span))
+                    let receiver = self.lower_expr(receiver);
+                    let args =
+                        self.arena.alloc_from_iter(args.iter().map(|x| self.lower_expr_mut(x)));
+                    hir::ExprKind::MethodCall(hir_seg, receiver, args, self.lower_span(span))
                 }
                 ExprKind::Binary(binop, ref lhs, ref rhs) => {
                     let binop = self.lower_binop(binop);
@@ -91,13 +90,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 ExprKind::Cast(ref expr, ref ty) => {
                     let expr = self.lower_expr(expr);
                     let ty =
-                        self.lower_ty(ty, ImplTraitContext::Disallowed(ImplTraitPosition::Type));
+                        self.lower_ty(ty, &ImplTraitContext::Disallowed(ImplTraitPosition::Type));
                     hir::ExprKind::Cast(expr, ty)
                 }
                 ExprKind::Type(ref expr, ref ty) => {
                     let expr = self.lower_expr(expr);
                     let ty =
-                        self.lower_ty(ty, ImplTraitContext::Disallowed(ImplTraitPosition::Type));
+                        self.lower_ty(ty, &ImplTraitContext::Disallowed(ImplTraitPosition::Type));
                     hir::ExprKind::Type(expr, ty)
                 }
                 ExprKind::AddrOf(k, m, ref ohs) => {
@@ -147,13 +146,19 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         |this| this.with_new_scopes(|this| this.lower_block_expr(block)),
                     ),
                 ExprKind::Await(ref expr) => {
-                    let span = if expr.span.hi() < e.span.hi() {
-                        expr.span.shrink_to_hi().with_hi(e.span.hi())
+                    let dot_await_span = if expr.span.hi() < e.span.hi() {
+                        let span_with_whitespace = self
+                            .tcx
+                            .sess
+                            .source_map()
+                            .span_extend_while(expr.span, char::is_whitespace)
+                            .unwrap_or(expr.span);
+                        span_with_whitespace.shrink_to_hi().with_hi(e.span.hi())
                     } else {
                         // this is a recovered `await expr`
                         e.span
                     };
-                    self.lower_expr_await(span, expr)
+                    self.lower_expr_await(dot_await_span, expr)
                 }
                 ExprKind::Closure(
                     ref binder,
@@ -211,13 +216,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     self.lower_expr_range(e.span, e1.as_deref(), e2.as_deref(), lims)
                 }
                 ExprKind::Underscore => {
-                    self.tcx
-                        .sess.struct_span_err(
-                            e.span,
-                            "in expressions, `_` can only be used on the left-hand side of an assignment",
-                        )
-                        .span_label(e.span, "`_` not allowed here")
-                        .emit();
+                    self.tcx.sess.emit_err(UnderscoreExprLhsAssign { span: e.span });
                     hir::ExprKind::Err
                 }
                 ExprKind::Path(ref qself, ref path) => {
@@ -226,7 +225,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         qself,
                         path,
                         ParamMode::Optional,
-                        ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                        &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
                     );
                     hir::ExprKind::Path(qpath)
                 }
@@ -249,11 +248,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     let rest = match &se.rest {
                         StructRest::Base(e) => Some(self.lower_expr(e)),
                         StructRest::Rest(sp) => {
-                            self.tcx
-                                .sess
-                                .struct_span_err(*sp, "base expression required after `..`")
-                                .span_label(*sp, "add a base expression here")
-                                .emit();
+                            self.tcx.sess.emit_err(BaseExpressionDoubleDot { span: *sp });
                             Some(&*self.arena.alloc(self.expr_err(*sp)))
                         }
                         StructRest::None => None,
@@ -264,7 +259,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                             &se.qself,
                             &se.path,
                             ParamMode::Optional,
-                            ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                            &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
                         )),
                         self.arena
                             .alloc_from_iter(se.fields.iter().map(|x| self.lower_expr_field(x))),
@@ -563,7 +558,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
     ) -> hir::ExprKind<'hir> {
         let output = match ret_ty {
             Some(ty) => hir::FnRetTy::Return(
-                self.lower_ty(&ty, ImplTraitContext::Disallowed(ImplTraitPosition::AsyncBlock)),
+                self.lower_ty(&ty, &ImplTraitContext::Disallowed(ImplTraitPosition::AsyncBlock)),
             ),
             None => hir::FnRetTy::DefaultReturn(self.lower_span(span)),
         };
@@ -588,7 +583,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         let (pat, task_context_hid) = self.pat_ident_binding_mode(
             span,
             Ident::with_dummy_span(sym::_task_context),
-            hir::BindingAnnotation::Mutable,
+            hir::BindingAnnotation::MUT,
         );
         let param = hir::Param {
             hir_id: self.next_id(),
@@ -662,17 +657,10 @@ impl<'hir> LoweringContext<'_, 'hir> {
         match self.generator_kind {
             Some(hir::GeneratorKind::Async(_)) => {}
             Some(hir::GeneratorKind::Gen) | None => {
-                let mut err = struct_span_err!(
-                    self.tcx.sess,
+                self.tcx.sess.emit_err(AwaitOnlyInAsyncFnAndBlocks {
                     dot_await_span,
-                    E0728,
-                    "`await` is only allowed inside `async` functions and blocks"
-                );
-                err.span_label(dot_await_span, "only allowed inside `async` functions and blocks");
-                if let Some(item_sp) = self.current_item {
-                    err.span_label(item_sp, "this is not `async`");
-                }
-                err.emit();
+                    item_span: self.current_item,
+                });
             }
         }
         let span = self.mark_span_with_reason(DesugaringKind::Await, dot_await_span, None);
@@ -689,7 +677,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         // this name to identify what is being awaited by a suspended async functions.
         let awaitee_ident = Ident::with_dummy_span(sym::__awaitee);
         let (awaitee_pat, awaitee_pat_hid) =
-            self.pat_ident_binding_mode(span, awaitee_ident, hir::BindingAnnotation::Mutable);
+            self.pat_ident_binding_mode(span, awaitee_ident, hir::BindingAnnotation::MUT);
 
         let task_context_ident = Ident::with_dummy_span(sym::_task_context);
 
@@ -867,7 +855,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
 
         let bound_generic_params = self.lower_lifetime_binder(closure_id, generic_params);
         // Lower outside new scope to preserve `is_in_loop_condition`.
-        let fn_decl = self.lower_fn_decl(decl, None, FnDeclKind::Closure, None);
+        let fn_decl = self.lower_fn_decl(decl, None, fn_decl_span, FnDeclKind::Closure, None);
 
         let c = self.arena.alloc(hir::Closure {
             binder: binder_clause,
@@ -892,13 +880,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         match generator_kind {
             Some(hir::GeneratorKind::Gen) => {
                 if decl.inputs.len() > 1 {
-                    struct_span_err!(
-                        self.tcx.sess,
-                        fn_decl_span,
-                        E0628,
-                        "too many parameters for a generator (expected 0 or 1 parameters)"
-                    )
-                    .emit();
+                    self.tcx.sess.emit_err(GeneratorTooManyParameters { fn_decl_span });
                 }
                 Some(movability)
             }
@@ -907,13 +889,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
             }
             None => {
                 if movability == Movability::Static {
-                    struct_span_err!(
-                        self.tcx.sess,
-                        fn_decl_span,
-                        E0697,
-                        "closures cannot be static"
-                    )
-                    .emit();
+                    self.tcx.sess.emit_err(ClosureCannotBeStatic { fn_decl_span });
                 }
                 None
             }
@@ -946,10 +922,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         fn_decl_span: Span,
     ) -> hir::ExprKind<'hir> {
         if let &ClosureBinder::For { span, .. } = binder {
-            self.tcx.sess.span_err(
-                span,
-                "`for<...>` binders on `async` closures are not currently supported",
-            );
+            self.tcx.sess.emit_err(NotSupportedForLifetimeBinderAsyncClosure { span });
         }
 
         let (binder_clause, generic_params) = self.lower_closure_binder(binder);
@@ -960,17 +933,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         let body = self.with_new_scopes(|this| {
             // FIXME(cramertj): allow `async` non-`move` closures with arguments.
             if capture_clause == CaptureBy::Ref && !decl.inputs.is_empty() {
-                struct_span_err!(
-                    this.tcx.sess,
-                    fn_decl_span,
-                    E0708,
-                    "`async` non-`move` closures with parameters are not currently supported",
-                )
-                .help(
-                    "consider using `let` statements to manually capture \
-                    variables by reference before entering an `async move` closure",
-                )
-                .emit();
+                this.tcx.sess.emit_err(AsyncNonMoveClosureNotSupported { fn_decl_span });
             }
 
             // Transform `async |x: u8| -> X { ... }` into
@@ -992,11 +955,11 @@ impl<'hir> LoweringContext<'_, 'hir> {
         });
 
         let bound_generic_params = self.lower_lifetime_binder(closure_id, generic_params);
-
         // We need to lower the declaration outside the new scope, because we
         // have to conserve the state of being inside a loop condition for the
         // closure argument types.
-        let fn_decl = self.lower_fn_decl(&outer_decl, None, FnDeclKind::Closure, None);
+        let fn_decl =
+            self.lower_fn_decl(&outer_decl, None, fn_decl_span, FnDeclKind::Closure, None);
 
         let c = self.arena.alloc(hir::Closure {
             binder: binder_clause,
@@ -1166,11 +1129,14 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         qself,
                         path,
                         ParamMode::Optional,
-                        ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                        &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
                     );
                     // Destructure like a tuple struct.
-                    let tuple_struct_pat =
-                        hir::PatKind::TupleStruct(qpath, pats, rest.map(|r| r.0));
+                    let tuple_struct_pat = hir::PatKind::TupleStruct(
+                        qpath,
+                        pats,
+                        hir::DotDotPos::new(rest.map(|r| r.0)),
+                    );
                     return self.pat_without_dbm(lhs.span, tuple_struct_pat);
                 }
             }
@@ -1182,7 +1148,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         qself,
                         path,
                         ParamMode::Optional,
-                        ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                        &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
                     );
                     // Destructure like a unit struct.
                     let unit_struct_pat = hir::PatKind::Path(qpath);
@@ -1206,24 +1172,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     &se.qself,
                     &se.path,
                     ParamMode::Optional,
-                    ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                    &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
                 );
                 let fields_omitted = match &se.rest {
                     StructRest::Base(e) => {
-                        self.tcx
-                            .sess
-                            .struct_span_err(
-                                e.span,
-                                "functional record updates are not allowed in destructuring \
-                                    assignments",
-                            )
-                            .span_suggestion(
-                                e.span,
-                                "consider removing the trailing pattern",
-                                "",
-                                rustc_errors::Applicability::MachineApplicable,
-                            )
-                            .emit();
+                        self.tcx.sess.emit_err(FunctionalRecordUpdateDestructuringAssignemnt {
+                            span: e.span,
+                        });
                         true
                     }
                     StructRest::Rest(_) => true,
@@ -1236,13 +1191,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
             ExprKind::Tup(elements) => {
                 let (pats, rest) =
                     self.destructure_sequence(elements, "tuple", eq_sign_span, assignments);
-                let tuple_pat = hir::PatKind::Tuple(pats, rest.map(|r| r.0));
+                let tuple_pat = hir::PatKind::Tuple(pats, hir::DotDotPos::new(rest.map(|r| r.0)));
                 return self.pat_without_dbm(lhs.span, tuple_pat);
             }
             ExprKind::Paren(e) => {
                 // We special-case `(..)` for consistency with patterns.
                 if let ExprKind::Range(None, None, RangeLimits::HalfOpen) = e.kind {
-                    let tuple_pat = hir::PatKind::Tuple(&[], Some(0));
+                    let tuple_pat = hir::PatKind::Tuple(&[], hir::DotDotPos::new(Some(0)));
                     return self.pat_without_dbm(lhs.span, tuple_pat);
                 } else {
                     return self.destructure_assign_mut(e, eq_sign_span, assignments);
@@ -1318,7 +1273,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
             (Some(..), Some(..), HalfOpen) => hir::LangItem::Range,
             (None, Some(..), Closed) => hir::LangItem::RangeToInclusive,
             (Some(..), Some(..), Closed) => unreachable!(),
-            (_, None, Closed) => self.diagnostic().span_fatal(span, "inclusive range with no end"),
+            (start, None, Closed) => {
+                self.tcx.sess.emit_err(InclusiveRangeWithNoEnd { span });
+                match start {
+                    Some(..) => hir::LangItem::RangeFrom,
+                    None => hir::LangItem::RangeFull,
+                }
+            }
         };
 
         let fields = self.arena.alloc_from_iter(
@@ -1420,13 +1381,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         match self.generator_kind {
             Some(hir::GeneratorKind::Gen) => {}
             Some(hir::GeneratorKind::Async(_)) => {
-                struct_span_err!(
-                    self.tcx.sess,
-                    span,
-                    E0727,
-                    "`async` generators are not yet supported"
-                )
-                .emit();
+                self.tcx.sess.emit_err(AsyncGeneratorsNotSupported { span });
             }
             None => self.generator_kind = Some(hir::GeneratorKind::Gen),
         }
@@ -1487,7 +1442,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         // `mut iter`
         let iter = Ident::with_dummy_span(sym::iter);
         let (iter_pat, iter_pat_nid) =
-            self.pat_ident_binding_mode(head_span, iter, hir::BindingAnnotation::Mutable);
+            self.pat_ident_binding_mode(head_span, iter, hir::BindingAnnotation::MUT);
 
         // `match Iterator::next(&mut iter) { ... }`
         let match_expr = {
@@ -1593,9 +1548,9 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 let uc_nested = attr::mk_nested_word_item(uc_ident);
                 attr::mk_list_item(allow_ident, vec![uc_nested])
             };
-            attr::mk_attr_outer(allow)
+            attr::mk_attr_outer(&self.tcx.sess.parse_sess.attr_id_generator, allow)
         };
-        let attrs: AttrVec = vec![attr].into();
+        let attrs: AttrVec = thin_vec![attr];
 
         // `ControlFlow::Continue(val) => #[allow(unreachable_code)] val,`
         let continue_arm = {
@@ -1830,12 +1785,14 @@ impl<'hir> LoweringContext<'_, 'hir> {
         binding: hir::HirId,
         attrs: AttrVec,
     ) -> hir::Expr<'hir> {
+        let hir_id = self.next_id();
+        let res = Res::Local(binding);
         let expr_path = hir::ExprKind::Path(hir::QPath::Resolved(
             None,
             self.arena.alloc(hir::Path {
                 span: self.lower_span(span),
-                res: Res::Local(binding),
-                segments: arena_vec![self; hir::PathSegment::from_ident(ident)],
+                res,
+                segments: arena_vec![self; hir::PathSegment::new(ident, hir_id, res)],
             }),
         ));
 

@@ -33,8 +33,6 @@ use rustc_span::{BytePos, Span};
 use std::iter;
 use std::ops::Deref;
 
-use tracing::debug;
-
 type Res = def::Res<ast::NodeId>;
 
 /// A field or associated item from self type suggested in case of resolution failure.
@@ -250,13 +248,30 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                 .map_or_else(String::new, |res| format!("{} ", res.descr()));
                 (mod_prefix, format!("`{}`", Segment::names_to_string(mod_path)), None)
             };
+
+            let (fallback_label, suggestion) = if path_str == "async"
+                && expected.starts_with("struct")
+            {
+                ("`async` blocks are only allowed in Rust 2018 or later".to_string(), suggestion)
+            } else {
+                // check if we are in situation of typo like `True` instead of `true`.
+                let override_suggestion =
+                    if ["true", "false"].contains(&item_str.to_string().to_lowercase().as_str()) {
+                        let item_typo = item_str.to_string().to_lowercase();
+                        Some((
+                            item_span,
+                            "you may want to use a bool value instead",
+                            format!("{}", item_typo),
+                        ))
+                    } else {
+                        suggestion
+                    };
+                (format!("not found in {mod_str}"), override_suggestion)
+            };
+
             BaseError {
                 msg: format!("cannot find {expected} `{item_str}` in {mod_prefix}{mod_str}"),
-                fallback_label: if path_str == "async" && expected.starts_with("struct") {
-                    "`async` blocks are only allowed in Rust 2018 or later".to_string()
-                } else {
-                    format!("not found in {mod_str}")
-                },
+                fallback_label,
                 span: item_span,
                 span_label: None,
                 could_be_expr: false,
@@ -602,9 +617,9 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                         .filter(|&sp| sp != base_error.span)
                         .collect();
 
-                    let start_span = bounds.iter().map(|bound| bound.span()).next().unwrap();
+                    let start_span = bounds[0].span();
                     // `end_span` is the end of the poly trait ref (Foo + 'baz + Bar><)
-                    let end_span = bounds.iter().map(|bound| bound.span()).last().unwrap();
+                    let end_span = bounds.last().unwrap().span();
                     // `last_bound_span` is the last bound of the poly trait ref (Foo + >'baz< + Bar)
                     let last_bound_span = spans.last().cloned().unwrap();
                     let mut multi_span: MultiSpan = spans.clone().into();
@@ -1775,7 +1790,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                 }
             };
 
-            let mut suggestable_variants = variants
+            let suggestable_variants = variants
                 .iter()
                 .filter(|(_, def_id, kind)| !needs_placeholder(*def_id, *kind))
                 .map(|(variant, _, kind)| (path_names_to_string(variant), kind))
@@ -1785,8 +1800,9 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                     CtorKind::Fictive => format!("({} {{}})", variant),
                 })
                 .collect::<Vec<_>>();
+            let no_suggestable_variant = suggestable_variants.is_empty();
 
-            if !suggestable_variants.is_empty() {
+            if !no_suggestable_variant {
                 let msg = if suggestable_variants.len() == 1 {
                     "you might have meant to use the following enum variant"
                 } else {
@@ -1796,7 +1812,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                 err.span_suggestions(
                     span,
                     msg,
-                    suggestable_variants.drain(..),
+                    suggestable_variants.into_iter(),
                     Applicability::MaybeIncorrect,
                 );
             }
@@ -1813,15 +1829,15 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                 .collect::<Vec<_>>();
 
             if !suggestable_variants_with_placeholders.is_empty() {
-                let msg = match (
-                    suggestable_variants.is_empty(),
-                    suggestable_variants_with_placeholders.len(),
-                ) {
-                    (true, 1) => "the following enum variant is available",
-                    (true, _) => "the following enum variants are available",
-                    (false, 1) => "alternatively, the following enum variant is available",
-                    (false, _) => "alternatively, the following enum variants are also available",
-                };
+                let msg =
+                    match (no_suggestable_variant, suggestable_variants_with_placeholders.len()) {
+                        (true, 1) => "the following enum variant is available",
+                        (true, _) => "the following enum variants are available",
+                        (false, 1) => "alternatively, the following enum variant is available",
+                        (false, _) => {
+                            "alternatively, the following enum variants are also available"
+                        }
+                    };
 
                 err.span_suggestions(
                     span,
@@ -2333,7 +2349,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                         err.multipart_suggestion_verbose(
                             message,
                             std::iter::once((span, intro_sugg))
-                                .chain(spans_suggs.clone())
+                                .chain(spans_suggs.iter().cloned())
                                 .collect(),
                             Applicability::MaybeIncorrect,
                         );

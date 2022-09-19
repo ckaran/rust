@@ -647,9 +647,9 @@ impl<'a> Builder<'a> {
                 test::CrateRustdocJsonTypes,
                 test::Linkcheck,
                 test::TierCheck,
+                test::ReplacePlaceholderTest,
                 test::Cargotest,
                 test::Cargo,
-                test::Rls,
                 test::RustAnalyzer,
                 test::ErrorIndex,
                 test::Distcheck,
@@ -708,6 +708,7 @@ impl<'a> Builder<'a> {
             Kind::Dist => describe!(
                 dist::Docs,
                 dist::RustcDocs,
+                dist::JsonDocs,
                 dist::Mingw,
                 dist::Rustc,
                 dist::Std,
@@ -736,7 +737,6 @@ impl<'a> Builder<'a> {
                 install::Docs,
                 install::Std,
                 install::Cargo,
-                install::Rls,
                 install::RustAnalyzer,
                 install::Rustfmt,
                 install::RustDemangler,
@@ -746,7 +746,12 @@ impl<'a> Builder<'a> {
                 install::Src,
                 install::Rustc
             ),
-            Kind::Run => describe!(run::ExpandYamlAnchors, run::BuildManifest, run::BumpStage0),
+            Kind::Run => describe!(
+                run::ExpandYamlAnchors,
+                run::BuildManifest,
+                run::BumpStage0,
+                run::ReplaceVersionPlaceholder,
+            ),
             // These commands either don't use paths, or they're special-cased in Build::build()
             Kind::Clean | Kind::Format | Kind::Setup => vec![],
         }
@@ -942,7 +947,7 @@ impl<'a> Builder<'a> {
         };
         patchelf.args(&[OsString::from("--set-rpath"), rpath_entries]);
         if !fname.extension().map_or(false, |ext| ext == "so") {
-            // Finally, set the corret .interp for binaries
+            // Finally, set the correct .interp for binaries
             let dynamic_linker_path = nix_deps_dir.join("nix-support/dynamic-linker");
             // FIXME: can we support utf8 here? `args` doesn't accept Vec<u8>, only OsString ...
             let dynamic_linker = t!(String::from_utf8(t!(fs::read(dynamic_linker_path))));
@@ -958,7 +963,7 @@ impl<'a> Builder<'a> {
         let tempfile = self.tempdir().join(dest_path.file_name().unwrap());
         // While bootstrap itself only supports http and https downloads, downstream forks might
         // need to download components from other protocols. The match allows them adding more
-        // protocols without worrying about merge conficts if we change the HTTP implementation.
+        // protocols without worrying about merge conflicts if we change the HTTP implementation.
         match url.split_once("://").map(|(proto, _)| proto) {
             Some("http") | Some("https") => {
                 self.download_http_with_retries(&tempfile, url, help_on_error)
@@ -1321,6 +1326,9 @@ impl<'a> Builder<'a> {
     ) -> Cargo {
         let mut cargo = Command::new(&self.initial_cargo);
         let out_dir = self.stage_out(compiler, mode);
+        // Run cargo from the source root so it can find .cargo/config.
+        // This matters when using vendoring and the working directory is outside the repository.
+        cargo.current_dir(&self.src);
 
         // Codegen backends are not yet tracked by -Zbinary-dep-depinfo,
         // so we need to explicitly clear out if they've been updated.
@@ -1759,23 +1767,21 @@ impl<'a> Builder<'a> {
             },
         );
 
-        if !target.contains("windows") {
-            let needs_unstable_opts = target.contains("linux")
-                || target.contains("solaris")
-                || target.contains("windows")
-                || target.contains("bsd")
-                || target.contains("dragonfly")
-                || target.contains("illumos");
+        let split_debuginfo_is_stable = target.contains("linux")
+            || target.contains("apple")
+            || (target.contains("msvc")
+                && self.config.rust_split_debuginfo == SplitDebuginfo::Packed)
+            || (target.contains("windows")
+                && self.config.rust_split_debuginfo == SplitDebuginfo::Off);
 
-            if needs_unstable_opts {
-                rustflags.arg("-Zunstable-options");
-            }
-            match self.config.rust_split_debuginfo {
-                SplitDebuginfo::Packed => rustflags.arg("-Csplit-debuginfo=packed"),
-                SplitDebuginfo::Unpacked => rustflags.arg("-Csplit-debuginfo=unpacked"),
-                SplitDebuginfo::Off => rustflags.arg("-Csplit-debuginfo=off"),
-            };
+        if !split_debuginfo_is_stable {
+            rustflags.arg("-Zunstable-options");
         }
+        match self.config.rust_split_debuginfo {
+            SplitDebuginfo::Packed => rustflags.arg("-Csplit-debuginfo=packed"),
+            SplitDebuginfo::Unpacked => rustflags.arg("-Csplit-debuginfo=unpacked"),
+            SplitDebuginfo::Off => rustflags.arg("-Csplit-debuginfo=off"),
+        };
 
         if self.config.cmd.bless() {
             // Bless `expect!` tests.
@@ -1938,25 +1944,26 @@ impl<'a> Builder<'a> {
                     _ => s.display().to_string(),
                 }
             };
+            let triple_underscored = target.triple.replace("-", "_");
             let cc = ccacheify(&self.cc(target));
-            cargo.env(format!("CC_{}", target.triple), &cc);
+            cargo.env(format!("CC_{}", triple_underscored), &cc);
 
             let cflags = self.cflags(target, GitRepo::Rustc, CLang::C).join(" ");
-            cargo.env(format!("CFLAGS_{}", target.triple), &cflags);
+            cargo.env(format!("CFLAGS_{}", triple_underscored), &cflags);
 
             if let Some(ar) = self.ar(target) {
                 let ranlib = format!("{} s", ar.display());
                 cargo
-                    .env(format!("AR_{}", target.triple), ar)
-                    .env(format!("RANLIB_{}", target.triple), ranlib);
+                    .env(format!("AR_{}", triple_underscored), ar)
+                    .env(format!("RANLIB_{}", triple_underscored), ranlib);
             }
 
             if let Ok(cxx) = self.cxx(target) {
                 let cxx = ccacheify(&cxx);
                 let cxxflags = self.cflags(target, GitRepo::Rustc, CLang::Cxx).join(" ");
                 cargo
-                    .env(format!("CXX_{}", target.triple), &cxx)
-                    .env(format!("CXXFLAGS_{}", target.triple), cxxflags);
+                    .env(format!("CXX_{}", triple_underscored), &cxx)
+                    .env(format!("CXXFLAGS_{}", triple_underscored), cxxflags);
             }
         }
 

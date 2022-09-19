@@ -5,7 +5,7 @@
 #![feature(associated_type_defaults)]
 #![feature(closure_track_caller)]
 #![feature(const_btree_new)]
-#![feature(let_else)]
+#![cfg_attr(bootstrap, feature(let_else))]
 #![feature(once_cell)]
 #![feature(min_specialization)]
 #![feature(never_type)]
@@ -18,6 +18,9 @@
 extern crate rustc_macros;
 
 #[macro_use]
+extern crate tracing;
+
+#[macro_use]
 extern crate rustc_data_structures;
 
 extern crate self as rustc_hir;
@@ -27,6 +30,7 @@ pub mod def;
 pub mod def_path_hash_map;
 pub mod definitions;
 pub mod diagnostic_items;
+pub mod errors;
 pub use rustc_span::def_id;
 mod hir;
 pub mod hir_id;

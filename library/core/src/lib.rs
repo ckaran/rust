@@ -93,6 +93,7 @@
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]
 #![allow(explicit_outlives_requirements)]
+#![allow(incomplete_features)]
 //
 // Library features:
 #![feature(const_align_offset)]
@@ -130,7 +131,6 @@
 #![feature(const_replace)]
 #![feature(const_ptr_as_ref)]
 #![feature(const_ptr_is_null)]
-#![feature(const_ptr_offset_from)]
 #![feature(const_ptr_read)]
 #![feature(const_ptr_write)]
 #![feature(const_raw_ptr_comparison)]
@@ -143,6 +143,7 @@
 #![feature(const_type_id)]
 #![feature(const_type_name)]
 #![feature(const_default_impls)]
+#![feature(const_unicode_case_lookup)]
 #![feature(const_unsafecell_get_mut)]
 #![feature(core_panic)]
 #![feature(duration_consts_float)]
@@ -158,9 +159,11 @@
 #![feature(const_slice_from_ref)]
 #![feature(const_slice_index)]
 #![feature(const_is_char_boundary)]
+#![feature(const_cstr_methods)]
 //
 // Language features:
 #![feature(abi_unadjusted)]
+#![feature(adt_const_params)]
 #![feature(allow_internal_unsafe)]
 #![feature(allow_internal_unstable)]
 #![feature(associated_type_bounds)]

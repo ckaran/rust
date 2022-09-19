@@ -15,7 +15,7 @@
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![feature(array_windows)]
-#![feature(let_else)]
+#![cfg_attr(bootstrap, feature(let_else))]
 #![feature(if_let_guard)]
 #![feature(negative_impls)]
 #![feature(min_specialization)]
@@ -75,8 +75,6 @@ use md5::Digest;
 use md5::Md5;
 use sha1::Sha1;
 use sha2::Sha256;
-
-use tracing::debug;
 
 #[cfg(test)]
 mod tests;
@@ -564,6 +562,13 @@ impl Span {
     #[inline]
     pub fn from_expansion(self) -> bool {
         self.ctxt() != SyntaxContext::root()
+    }
+
+    /// Returns `true` if `span` originates in a macro's expansion where debuginfo should be
+    /// collapsed.
+    pub fn in_macro_expansion_with_collapse_debuginfo(self) -> bool {
+        let outer_expn = self.ctxt().outer_expn_data();
+        matches!(outer_expn.kind, ExpnKind::Macro(..)) && outer_expn.collapse_debuginfo
     }
 
     /// Returns `true` if `span` originates in a derive-macro's expansion.

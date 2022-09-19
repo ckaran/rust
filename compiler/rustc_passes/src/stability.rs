@@ -2,7 +2,8 @@
 //! propagating default levels lexically from parent to children ast nodes.
 
 use rustc_attr::{
-    self as attr, ConstStability, Stability, StabilityLevel, Unstable, UnstableReason,
+    self as attr, rust_version_symbol, ConstStability, Stability, StabilityLevel, Unstable,
+    UnstableReason, VERSION_PLACEHOLDER,
 };
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
 use rustc_errors::{struct_span_err, Applicability};
@@ -832,7 +833,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'tcx> {
                 // added, such as `core::intrinsics::transmute`
                 let parents = path.segments.iter().rev().skip(1);
                 for path_segment in parents {
-                    if let Some(def_id) = path_segment.res.as_ref().and_then(Res::opt_def_id) {
+                    if let Some(def_id) = path_segment.res.opt_def_id() {
                         // use `None` for id to prevent deprecation check
                         self.tcx.check_stability_allow_unstable(
                             def_id,
@@ -1106,7 +1107,15 @@ fn unnecessary_partially_stable_feature_lint(
     });
 }
 
-fn unnecessary_stable_feature_lint(tcx: TyCtxt<'_>, span: Span, feature: Symbol, since: Symbol) {
+fn unnecessary_stable_feature_lint(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    feature: Symbol,
+    mut since: Symbol,
+) {
+    if since.as_str() == VERSION_PLACEHOLDER {
+        since = rust_version_symbol();
+    }
     tcx.struct_span_lint_hir(lint::builtin::STABLE_FEATURES, hir::CRATE_HIR_ID, span, |lint| {
         lint.build(&format!(
             "the feature `{feature}` has been stable since {since} and no longer requires an \

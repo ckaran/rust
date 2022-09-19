@@ -11,8 +11,6 @@ use rustc_span::source_map::Spanned;
 use rustc_span::symbol::sym;
 use rustc_span::Span;
 
-use tracing::debug;
-
 macro_rules! gate_feature_fn {
     ($visitor: expr, $has_feature: expr, $span: expr, $name: expr, $explain: expr, $help: expr) => {{
         let (visitor, has_feature, span, name, explain, help) =
@@ -342,25 +340,6 @@ impl<'a> PostExpansionVisitor<'a> {
         }
     }
 
-    fn check_gat(&self, generics: &ast::Generics, span: Span) {
-        if !generics.params.is_empty() {
-            gate_feature_post!(
-                &self,
-                generic_associated_types,
-                span,
-                "generic associated types are unstable"
-            );
-        }
-        if !generics.where_clause.predicates.is_empty() {
-            gate_feature_post!(
-                &self,
-                generic_associated_types,
-                span,
-                "where clauses on associated types are unstable"
-            );
-        }
-    }
-
     /// Feature gate `impl Trait` inside `type Alias = $type_expr;`.
     fn check_impl_trait(&self, ty: &ast::Ty) {
         struct ImplTraitVisitor<'a> {
@@ -575,6 +554,9 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
             ast::TyKind::Never => {
                 gate_feature_post!(&self, never_type, ty.span, "the `!` type is experimental");
             }
+            ast::TyKind::TraitObject(_, ast::TraitObjectSyntax::DynStar, ..) => {
+                gate_feature_post!(&self, dyn_star, ty.span, "dyn* trait objects are unstable");
+            }
             _ => {}
         }
         visit::walk_ty(self, ty)
@@ -701,7 +683,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
             gate_feature_post!(&self, c_variadic, span, "C-variadic functions are unstable");
         }
 
-        visit::walk_fn(self, fn_kind, span)
+        visit::walk_fn(self, fn_kind)
     }
 
     fn visit_assoc_constraint(&mut self, constraint: &'a AssocConstraint) {
@@ -719,7 +701,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
     fn visit_assoc_item(&mut self, i: &'a ast::AssocItem, ctxt: AssocCtxt) {
         let is_fn = match i.kind {
             ast::AssocItemKind::Fn(_) => true,
-            ast::AssocItemKind::TyAlias(box ast::TyAlias { ref generics, ref ty, .. }) => {
+            ast::AssocItemKind::TyAlias(box ast::TyAlias { ref ty, .. }) => {
                 if let (Some(_), AssocCtxt::Trait) = (ty, ctxt) {
                     gate_feature_post!(
                         &self,
@@ -731,7 +713,6 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                 if let Some(ty) = ty {
                     self.check_impl_trait(ty);
                 }
-                self.check_gat(generics, i.span);
                 false
             }
             _ => false,
@@ -777,6 +758,7 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session) {
         "`if let` guards are experimental",
         "you can write `if matches!(<expr>, <pattern>)` instead of `if let <pattern> = <expr>`"
     );
+    gate_all!(let_chains, "`let` expressions in this position are unstable");
     gate_all!(
         async_closure,
         "async closures are unstable",

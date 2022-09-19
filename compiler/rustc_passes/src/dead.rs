@@ -11,7 +11,7 @@ use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{Node, PatKind, TyKind};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
-use rustc_middle::middle::privacy;
+use rustc_middle::middle::privacy::AccessLevel;
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::{self, DefIdTree, TyCtxt};
 use rustc_session::lint;
@@ -226,19 +226,16 @@ impl<'tcx> MarkSymbolVisitor<'tcx> {
         lhs: &hir::Pat<'_>,
         res: Res,
         pats: &[hir::Pat<'_>],
-        dotdot: Option<usize>,
+        dotdot: hir::DotDotPos,
     ) {
         let variant = match self.typeck_results().node_type(lhs.hir_id).kind() {
             ty::Adt(adt, _) => adt.variant_of_res(res),
             _ => span_bug!(lhs.span, "non-ADT in tuple struct pattern"),
         };
-        let first_n = pats.iter().enumerate().take(dotdot.unwrap_or(pats.len()));
+        let dotdot = dotdot.as_opt_usize().unwrap_or(pats.len());
+        let first_n = pats.iter().enumerate().take(dotdot);
         let missing = variant.fields.len() - pats.len();
-        let last_n = pats
-            .iter()
-            .enumerate()
-            .skip(dotdot.unwrap_or(pats.len()))
-            .map(|(idx, pat)| (idx + missing, pat));
+        let last_n = pats.iter().enumerate().skip(dotdot).map(|(idx, pat)| (idx + missing, pat));
         for (idx, pat) in first_n.chain(last_n) {
             if let PatKind::Wild = pat.kind {
                 continue;
@@ -450,7 +447,7 @@ impl<'tcx> Visitor<'tcx> for MarkSymbolVisitor<'tcx> {
     }
 
     fn visit_ty(&mut self, ty: &'tcx hir::Ty<'tcx>) {
-        if let TyKind::OpaqueDef(item_id, _) = ty.kind {
+        if let TyKind::OpaqueDef(item_id, _, _) = ty.kind {
             let item = self.tcx.hir().item(item_id);
             intravisit::walk_item(self, item);
         }
@@ -622,13 +619,10 @@ fn create_and_seed_worklist<'tcx>(
     // see `MarkSymbolVisitor::struct_constructors`
     let mut struct_constructors = Default::default();
     let mut worklist = access_levels
-        .map
         .iter()
-        .filter_map(
-            |(&id, &level)| {
-                if level >= privacy::AccessLevel::Reachable { Some(id) } else { None }
-            },
-        )
+        .filter_map(|(&id, effective_vis)| {
+            effective_vis.is_public_at_level(AccessLevel::Reachable).then_some(id)
+        })
         // Seed entry point
         .chain(tcx.entry_fn(()).and_then(|(def_id, _)| def_id.as_local()))
         .collect::<Vec<_>>();

@@ -254,7 +254,8 @@
 #![feature(intra_doc_pointers)]
 #![cfg_attr(bootstrap, feature(label_break_value))]
 #![feature(lang_items)]
-#![feature(let_else)]
+#![feature(let_chains)]
+#![cfg_attr(bootstrap, feature(let_else))]
 #![feature(linkage)]
 #![feature(link_cfg)]
 #![feature(min_specialization)]
@@ -288,6 +289,7 @@
 #![feature(exclusive_wrapper)]
 #![feature(extend_one)]
 #![feature(float_minimum_maximum)]
+#![feature(float_next_up_down)]
 #![feature(hasher_prefixfree_extras)]
 #![feature(hashmap_internals)]
 #![feature(int_error_internals)]
@@ -299,6 +301,7 @@
 #![feature(panic_can_unwind)]
 #![feature(panic_info_message)]
 #![feature(panic_internals)]
+#![feature(pointer_byte_offsets)]
 #![feature(pointer_is_aligned)]
 #![feature(portable_simd)]
 #![feature(prelude_2024)]
@@ -594,6 +597,7 @@ pub mod alloc;
 
 // Private support modules
 mod panicking;
+mod personality;
 
 #[path = "../../backtrace/src/lib.rs"]
 #[allow(dead_code, unused_attributes)]

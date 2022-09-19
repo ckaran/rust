@@ -1096,7 +1096,7 @@ extern "C" {
     pub fn LLVMConstInt(IntTy: &Type, N: c_ulonglong, SignExtend: Bool) -> &Value;
     pub fn LLVMConstIntOfArbitraryPrecision(IntTy: &Type, Wn: c_uint, Ws: *const u64) -> &Value;
     pub fn LLVMConstReal(RealTy: &Type, N: f64) -> &Value;
-    pub fn LLVMConstIntGetZExtValue(ConstantVal: &ConstantInt) -> c_ulonglong;
+    pub fn LLVMRustConstIntGetZExtValue(ConstantVal: &ConstantInt, Value: &mut u64) -> bool;
     pub fn LLVMRustConstInt128Get(
         ConstantVal: &ConstantInt,
         SExt: bool,
@@ -2389,7 +2389,6 @@ extern "C" {
         AIR: &ArchiveIterator<'a>,
     ) -> Option<&'a mut ArchiveChild<'a>>;
     pub fn LLVMRustArchiveChildName(ACR: &ArchiveChild<'_>, size: &mut size_t) -> *const c_char;
-    pub fn LLVMRustArchiveChildData(ACR: &ArchiveChild<'_>, size: &mut size_t) -> *const c_char;
     pub fn LLVMRustArchiveChildFree<'a>(ACR: &'a mut ArchiveChild<'a>);
     pub fn LLVMRustArchiveIteratorFree<'a>(AIR: &'a mut ArchiveIterator<'a>);
     pub fn LLVMRustDestroyArchive(AR: &'static mut Archive);

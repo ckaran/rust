@@ -4,7 +4,7 @@ use crate::arena::Arena;
 use crate::dep_graph::{DepGraph, DepKind, DepKindStruct};
 use crate::hir::place::Place as HirPlace;
 use crate::infer::canonical::{Canonical, CanonicalVarInfo, CanonicalVarInfos};
-use crate::lint::{struct_lint_level, LintLevelSource};
+use crate::lint::struct_lint_level;
 use crate::middle::codegen_fn_attrs::CodegenFnAttrs;
 use crate::middle::resolve_lifetime;
 use crate::middle::stability;
@@ -22,6 +22,7 @@ use crate::ty::{
     FloatVar, FloatVid, GenericParamDefKind, InferConst, InferTy, IntTy, IntVar, IntVid, List,
     ParamConst, ParamTy, PolyFnSig, Predicate, PredicateKind, PredicateS, ProjectionTy, Region,
     RegionKind, ReprOptions, TraitObjectVisitor, Ty, TyKind, TyS, TyVar, TyVid, TypeAndMut, UintTy,
+    Visibility,
 };
 use rustc_ast as ast;
 use rustc_data_structures::fingerprint::Fingerprint;
@@ -52,7 +53,7 @@ use rustc_query_system::ich::StableHashingContext;
 use rustc_serialize::opaque::{FileEncodeResult, FileEncoder};
 use rustc_session::config::{CrateType, OutputFilenames};
 use rustc_session::cstore::CrateStoreDyn;
-use rustc_session::lint::{Level, Lint};
+use rustc_session::lint::Lint;
 use rustc_session::Limit;
 use rustc_session::Session;
 use rustc_span::def_id::{DefPathHash, StableCrateId};
@@ -62,7 +63,7 @@ use rustc_span::{Span, DUMMY_SP};
 use rustc_target::abi::{Layout, LayoutS, TargetDataLayout, VariantIdx};
 use rustc_target::spec::abi;
 use rustc_type_ir::sty::TyKind::*;
-use rustc_type_ir::{InternAs, InternIteratorElement, Interner, TypeFlags};
+use rustc_type_ir::{DynKind, InternAs, InternIteratorElement, Interner, TypeFlags};
 
 use std::any::Any;
 use std::borrow::Borrow;
@@ -275,9 +276,6 @@ pub struct CommonTypes<'tcx> {
 }
 
 pub struct CommonLifetimes<'tcx> {
-    /// `ReEmpty` in the root universe.
-    pub re_root_empty: Region<'tcx>,
-
     /// `ReStatic`
     pub re_static: Region<'tcx>,
 
@@ -874,7 +872,7 @@ pub type CanonicalUserTypeAnnotations<'tcx> =
 
 #[derive(Clone, Debug, TyEncodable, TyDecodable, HashStable, TypeFoldable, TypeVisitable, Lift)]
 pub struct CanonicalUserTypeAnnotation<'tcx> {
-    pub user_ty: CanonicalUserType<'tcx>,
+    pub user_ty: Box<CanonicalUserType<'tcx>>,
     pub span: Span,
     pub inferred_ty: Ty<'tcx>,
 }
@@ -986,11 +984,7 @@ impl<'tcx> CommonLifetimes<'tcx> {
             ))
         };
 
-        CommonLifetimes {
-            re_root_empty: mk(ty::ReEmpty(ty::UniverseIndex::ROOT)),
-            re_static: mk(ty::ReStatic),
-            re_erased: mk(ty::ReErased),
-        }
+        CommonLifetimes { re_static: mk(ty::ReStatic), re_erased: mk(ty::ReErased) }
     }
 }
 
@@ -1089,7 +1083,7 @@ pub struct GlobalCtxt<'tcx> {
 
     pub queries: &'tcx dyn query::QueryEngine<'tcx>,
     pub query_caches: query::QueryCaches<'tcx>,
-    query_kinds: &'tcx [DepKindStruct],
+    query_kinds: &'tcx [DepKindStruct<'tcx>],
 
     // Internal caches for metadata decoding. No need to track deps on this.
     pub ty_rcache: Lock<FxHashMap<ty::CReaderCacheKey, Ty<'tcx>>>,
@@ -1246,12 +1240,12 @@ impl<'tcx> TyCtxt<'tcx> {
         dep_graph: DepGraph,
         on_disk_cache: Option<&'tcx dyn OnDiskCache<'tcx>>,
         queries: &'tcx dyn query::QueryEngine<'tcx>,
-        query_kinds: &'tcx [DepKindStruct],
+        query_kinds: &'tcx [DepKindStruct<'tcx>],
         crate_name: &str,
         output_filenames: OutputFilenames,
     ) -> GlobalCtxt<'tcx> {
         let data_layout = TargetDataLayout::parse(&s.target).unwrap_or_else(|err| {
-            s.fatal(&err);
+            s.emit_fatal(err);
         });
         let interners = CtxtInterners::new(arena);
         let common_types = CommonTypes::new(
@@ -1296,7 +1290,7 @@ impl<'tcx> TyCtxt<'tcx> {
         }
     }
 
-    pub(crate) fn query_kind(self, k: DepKind) -> &'tcx DepKindStruct {
+    pub(crate) fn query_kind(self, k: DepKind) -> &'tcx DepKindStruct<'tcx> {
         &self.query_kinds[k as usize]
     }
 
@@ -1498,17 +1492,17 @@ impl<'tcx> TyCtxt<'tcx> {
         // Create a dependency to the crate to be sure we re-execute this when the amount of
         // definitions change.
         self.ensure().hir_crate(());
-        // Leak a read lock once we start iterating on definitions, to prevent adding new onces
+        // Leak a read lock once we start iterating on definitions, to prevent adding new ones
         // while iterating.  If some query needs to add definitions, it should be `ensure`d above.
         let definitions = self.definitions.leak();
         definitions.iter_local_def_id()
     }
 
     pub fn def_path_table(self) -> &'tcx rustc_hir::definitions::DefPathTable {
-        // Create a dependency to the crate to be sure we reexcute this when the amount of
+        // Create a dependency to the crate to be sure we re-execute this when the amount of
         // definitions change.
         self.ensure().hir_crate(());
-        // Leak a read lock once we start iterating on definitions, to prevent adding new onces
+        // Leak a read lock once we start iterating on definitions, to prevent adding new ones
         // while iterating.  If some query needs to add definitions, it should be `ensure`d above.
         let definitions = self.definitions.leak();
         definitions.def_path_table()
@@ -1517,10 +1511,10 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn def_path_hash_to_def_index_map(
         self,
     ) -> &'tcx rustc_hir::def_path_hash_map::DefPathHashMap {
-        // Create a dependency to the crate to be sure we reexcute this when the amount of
+        // Create a dependency to the crate to be sure we re-execute this when the amount of
         // definitions change.
         self.ensure().hir_crate(());
-        // Leak a read lock once we start iterating on definitions, to prevent adding new onces
+        // Leak a read lock once we start iterating on definitions, to prevent adding new ones
         // while iterating.  If some query needs to add definitions, it should be `ensure`d above.
         let definitions = self.definitions.leak();
         definitions.def_path_hash_to_def_index_map()
@@ -1596,7 +1590,7 @@ impl<'tcx> TyCtxt<'tcx> {
         })
     }
 
-    // Returns the `DefId` and the `BoundRegionKind` corresponding to the given region.
+    /// Returns the `DefId` and the `BoundRegionKind` corresponding to the given region.
     pub fn is_suitable_region(self, region: Region<'tcx>) -> Option<FreeRegionInfo> {
         let (suitable_region_binding_scope, bound_region) = match *region {
             ty::ReFree(ref free_region) => {
@@ -1728,6 +1722,11 @@ impl<'tcx> TyCtxt<'tcx> {
             .chain(self.crates(()).iter().copied())
             .flat_map(move |cnum| self.traits_in_crate(cnum).iter().copied())
     }
+
+    #[inline]
+    pub fn local_visibility(self, def_id: LocalDefId) -> Visibility {
+        self.visibility(def_id.to_def_id()).expect_local()
+    }
 }
 
 /// A trait implemented for all `X<'a>` types that can be safely and
@@ -1821,7 +1820,9 @@ nop_list_lift! {bound_variable_kinds; ty::BoundVariableKind => ty::BoundVariable
 // This is the impl for `&'a InternalSubsts<'a>`.
 nop_list_lift! {substs; GenericArg<'a> => GenericArg<'tcx>}
 
-CloneLiftImpls! { for<'tcx> { Constness, traits::WellFormedLoc, } }
+CloneLiftImpls! { for<'tcx> {
+    Constness, traits::WellFormedLoc, ImplPolarity, crate::mir::ReturnConstraint,
+} }
 
 pub mod tls {
     use super::{ptr_eq, GlobalCtxt, TyCtxt};
@@ -1829,9 +1830,9 @@ pub mod tls {
     use crate::dep_graph::TaskDepsRef;
     use crate::ty::query;
     use rustc_data_structures::sync::{self, Lock};
-    use rustc_data_structures::thin_vec::ThinVec;
     use rustc_errors::Diagnostic;
     use std::mem;
+    use thin_vec::ThinVec;
 
     #[cfg(not(parallel_compiler))]
     use std::cell::Cell;
@@ -2546,8 +2547,9 @@ impl<'tcx> TyCtxt<'tcx> {
         self,
         obj: &'tcx List<ty::Binder<'tcx, ExistentialPredicate<'tcx>>>,
         reg: ty::Region<'tcx>,
+        repr: DynKind,
     ) -> Ty<'tcx> {
-        self.mk_ty(Dynamic(obj, reg))
+        self.mk_ty(Dynamic(obj, reg, repr))
     }
 
     #[inline]
@@ -2808,44 +2810,6 @@ impl<'tcx> TyCtxt<'tcx> {
         iter: I,
     ) -> I::Output {
         iter.intern_with(|xs| self.intern_bound_variable_kinds(xs))
-    }
-
-    /// Walks upwards from `id` to find a node which might change lint levels with attributes.
-    /// It stops at `bound` and just returns it if reached.
-    pub fn maybe_lint_level_root_bounded(self, mut id: HirId, bound: HirId) -> HirId {
-        let hir = self.hir();
-        loop {
-            if id == bound {
-                return bound;
-            }
-
-            if hir.attrs(id).iter().any(|attr| Level::from_attr(attr).is_some()) {
-                return id;
-            }
-            let next = hir.get_parent_node(id);
-            if next == id {
-                bug!("lint traversal reached the root of the crate");
-            }
-            id = next;
-        }
-    }
-
-    pub fn lint_level_at_node(
-        self,
-        lint: &'static Lint,
-        mut id: hir::HirId,
-    ) -> (Level, LintLevelSource) {
-        let sets = self.lint_levels(());
-        loop {
-            if let Some(pair) = sets.level_and_source(lint, id, self.sess) {
-                return pair;
-            }
-            let next = self.hir().get_parent_node(id);
-            if next == id {
-                bug!("lint traversal reached the root of the crate");
-            }
-            id = next;
-        }
     }
 
     /// Emit a lint at `span` from a lint struct (some type that implements `DecorateLint`,

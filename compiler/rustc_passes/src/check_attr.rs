@@ -16,6 +16,7 @@ use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{self, FnSig, ForeignItem, HirId, Item, ItemKind, TraitItem, CRATE_HIR_ID};
 use rustc_hir::{MethodKind, Target};
 use rustc_middle::hir::nested_filter;
+use rustc_middle::middle::resolve_lifetime::ObjectLifetimeDefault;
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::lint::builtin::{
@@ -130,6 +131,7 @@ impl CheckAttrVisitor<'_> {
                 | sym::rustc_if_this_changed
                 | sym::rustc_then_this_would_need => self.check_rustc_dirty_clean(&attr),
                 sym::cmse_nonsecure_entry => self.check_cmse_nonsecure_entry(attr, span, target),
+                sym::collapse_debuginfo => self.check_collapse_debuginfo(attr, span, target),
                 sym::const_trait => self.check_const_trait(attr, span, target),
                 sym::must_not_suspend => self.check_must_not_suspend(&attr, span, target),
                 sym::must_use => self.check_must_use(hir_id, &attr, span, target),
@@ -172,6 +174,7 @@ impl CheckAttrVisitor<'_> {
                 sym::no_implicit_prelude => {
                     self.check_generic_attr(hir_id, attr, target, &[Target::Mod])
                 }
+                sym::rustc_object_lifetime_default => self.check_object_lifetime_default(hir_id),
                 _ => {}
             }
 
@@ -410,6 +413,38 @@ impl CheckAttrVisitor<'_> {
         }
     }
 
+    /// Debugging aid for `object_lifetime_default` query.
+    fn check_object_lifetime_default(&self, hir_id: HirId) {
+        let tcx = self.tcx;
+        if let Some(generics) = tcx.hir().get_generics(tcx.hir().local_def_id(hir_id)) {
+            for p in generics.params {
+                let hir::GenericParamKind::Type { .. } = p.kind else { continue };
+                let param_id = tcx.hir().local_def_id(p.hir_id);
+                let default = tcx.object_lifetime_default(param_id);
+                let repr = match default {
+                    ObjectLifetimeDefault::Empty => "BaseDefault".to_owned(),
+                    ObjectLifetimeDefault::Static => "'static".to_owned(),
+                    ObjectLifetimeDefault::Param(def_id) => tcx.item_name(def_id).to_string(),
+                    ObjectLifetimeDefault::Ambiguous => "Ambiguous".to_owned(),
+                };
+                tcx.sess.span_err(p.span, &repr);
+            }
+        }
+    }
+
+    /// Checks if `#[collapse_debuginfo]` is applied to a macro.
+    fn check_collapse_debuginfo(&self, attr: &Attribute, span: Span, target: Target) -> bool {
+        match target {
+            Target::MacroDef => true,
+            _ => {
+                self.tcx
+                    .sess
+                    .emit_err(errors::CollapseDebuginfo { attr_span: attr.span, defn_span: span });
+                false
+            }
+        }
+    }
+
     /// Checks if a `#[track_caller]` is applied to a non-naked function. Returns `true` if valid.
     fn check_track_caller(
         &self,
@@ -640,6 +675,7 @@ impl CheckAttrVisitor<'_> {
             | Target::GlobalAsm
             | Target::TyAlias
             | Target::OpaqueTy
+            | Target::ImplTraitPlaceholder
             | Target::Enum
             | Target::Variant
             | Target::Struct
@@ -1630,6 +1666,8 @@ impl CheckAttrVisitor<'_> {
                         E0552,
                         "unrecognized representation hint"
                     )
+                    .help("valid reprs are `C`, `align`, `packed`, `transparent`, `simd`, `i8`, `u8`, \
+                          `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `i128`, `u128`, `isize`, `usize`")
                     .emit();
 
                     continue;
@@ -2117,6 +2155,7 @@ fn check_invalid_crate_level_attr(tcx: TyCtxt<'_>, attrs: &[Attribute]) {
         sym::automatically_derived,
         sym::start,
         sym::rustc_main,
+        sym::unix_sigpipe,
         sym::derive,
         sym::test,
         sym::test_case,

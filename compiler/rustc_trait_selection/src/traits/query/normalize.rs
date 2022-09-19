@@ -6,7 +6,7 @@ use crate::infer::at::At;
 use crate::infer::canonical::OriginalQueryValues;
 use crate::infer::{InferCtxt, InferOk};
 use crate::traits::error_reporting::InferCtxtExt;
-use crate::traits::project::needs_normalization;
+use crate::traits::project::{needs_normalization, BoundVarReplacer, PlaceholderReplacer};
 use crate::traits::{Obligation, ObligationCause, PredicateObligation, Reveal};
 use rustc_data_structures::sso::SsoHashMap;
 use rustc_data_structures::stack::ensure_sufficient_stack;
@@ -48,10 +48,11 @@ impl<'cx, 'tcx> AtExt<'tcx> for At<'cx, 'tcx> {
         T: TypeFoldable<'tcx>,
     {
         debug!(
-            "normalize::<{}>(value={:?}, param_env={:?})",
+            "normalize::<{}>(value={:?}, param_env={:?}, cause={:?})",
             std::any::type_name::<T>(),
             value,
             self.param_env,
+            self.cause,
         );
         if !needs_normalization(&value, self.param_env.reveal()) {
             return Ok(Normalized { value, obligations: vec![] });
@@ -283,11 +284,7 @@ impl<'cx, 'tcx> FallibleTypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                 let tcx = self.infcx.tcx;
                 let infcx = self.infcx;
                 let (data, mapped_regions, mapped_types, mapped_consts) =
-                    crate::traits::project::BoundVarReplacer::replace_bound_vars(
-                        infcx,
-                        &mut self.universes,
-                        data,
-                    );
+                    BoundVarReplacer::replace_bound_vars(infcx, &mut self.universes, data);
                 let data = data.try_fold_with(self)?;
 
                 let mut orig_values = OriginalQueryValues::default();
@@ -313,8 +310,7 @@ impl<'cx, 'tcx> FallibleTypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                 debug!("QueryNormalizer: result = {:#?}", result);
                 debug!("QueryNormalizer: obligations = {:#?}", obligations);
                 self.obligations.extend(obligations);
-
-                let res = crate::traits::project::PlaceholderReplacer::replace_placeholders(
+                let res = PlaceholderReplacer::replace_placeholders(
                     infcx,
                     mapped_regions,
                     mapped_types,
@@ -343,7 +339,13 @@ impl<'cx, 'tcx> FallibleTypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
         constant: ty::Const<'tcx>,
     ) -> Result<ty::Const<'tcx>, Self::Error> {
         let constant = constant.try_super_fold_with(self)?;
-        Ok(constant.eval(self.infcx.tcx, self.param_env))
+        debug!(?constant, ?self.param_env);
+        Ok(crate::traits::project::with_replaced_escaping_bound_vars(
+            self.infcx,
+            &mut self.universes,
+            constant,
+            |constant| constant.eval(self.infcx.tcx, self.param_env),
+        ))
     }
 
     fn try_fold_mir_const(
@@ -365,7 +367,9 @@ impl<'cx, 'tcx> FallibleTypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                     _ => mir::ConstantKind::Ty(const_folded),
                 }
             }
-            mir::ConstantKind::Val(_, _) => constant.try_super_fold_with(self)?,
+            mir::ConstantKind::Val(_, _) | mir::ConstantKind::Unevaluated(..) => {
+                constant.try_super_fold_with(self)?
+            }
         })
     }
 

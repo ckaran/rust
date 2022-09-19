@@ -11,8 +11,6 @@ use rustc_session::Session;
 use rustc_span::source_map::SourceMap;
 use rustc_span::{Span, DUMMY_SP};
 
-use tracing::debug;
-
 /// A visitor that walks over the HIR and collects `Node`s into a HIR map.
 pub(super) struct NodeCollector<'a, 'hir> {
     /// Source map
@@ -31,7 +29,7 @@ pub(super) struct NodeCollector<'a, 'hir> {
     definitions: &'a definitions::Definitions,
 }
 
-#[tracing::instrument(level = "debug", skip(sess, definitions, bodies))]
+#[instrument(level = "debug", skip(sess, definitions, bodies))]
 pub(super) fn index_hir<'hir>(
     sess: &Session,
     definitions: &definitions::Definitions,
@@ -67,10 +65,11 @@ pub(super) fn index_hir<'hir>(
 }
 
 impl<'a, 'hir> NodeCollector<'a, 'hir> {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self))]
     fn insert(&mut self, span: Span, hir_id: HirId, node: Node<'hir>) {
         debug_assert_eq!(self.owner, hir_id.owner);
         debug_assert_ne!(hir_id.local_id.as_u32(), 0);
+        debug_assert_ne!(hir_id.local_id, self.parent_node);
 
         // Make sure that the DepNode of some node coincides with the HirId
         // owner of that node.
@@ -142,7 +141,7 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
         });
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self))]
     fn visit_item(&mut self, i: &'hir Item<'hir>) {
         debug_assert_eq!(i.def_id, self.owner);
         self.with_parent(i.hir_id(), |this| {
@@ -156,7 +155,7 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
         });
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self))]
     fn visit_foreign_item(&mut self, fi: &'hir ForeignItem<'hir>) {
         debug_assert_eq!(fi.def_id, self.owner);
         self.with_parent(fi.hir_id(), |this| {
@@ -175,7 +174,7 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
         })
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self))]
     fn visit_trait_item(&mut self, ti: &'hir TraitItem<'hir>) {
         debug_assert_eq!(ti.def_id, self.owner);
         self.with_parent(ti.hir_id(), |this| {
@@ -183,7 +182,7 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
         });
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self))]
     fn visit_impl_item(&mut self, ii: &'hir ImplItem<'hir>) {
         debug_assert_eq!(ii.def_id, self.owner);
         self.with_parent(ii.hir_id(), |this| {
@@ -247,11 +246,9 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
         });
     }
 
-    fn visit_path_segment(&mut self, path_span: Span, path_segment: &'hir PathSegment<'hir>) {
-        if let Some(hir_id) = path_segment.hir_id {
-            self.insert(path_span, hir_id, Node::PathSegment(path_segment));
-        }
-        intravisit::walk_path_segment(self, path_span, path_segment);
+    fn visit_path_segment(&mut self, path_segment: &'hir PathSegment<'hir>) {
+        self.insert(path_segment.ident.span, path_segment.hir_id, Node::PathSegment(path_segment));
+        intravisit::walk_path_segment(self, path_segment);
     }
 
     fn visit_ty(&mut self, ty: &'hir Ty<'hir>) {
@@ -283,12 +280,12 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
         fk: intravisit::FnKind<'hir>,
         fd: &'hir FnDecl<'hir>,
         b: BodyId,
-        s: Span,
+        _: Span,
         id: HirId,
     ) {
         assert_eq!(self.owner, id.owner);
         assert_eq!(self.parent_node, id.local_id);
-        intravisit::walk_fn(self, fk, fd, b, s, id);
+        intravisit::walk_fn(self, fk, fd, b, id);
     }
 
     fn visit_block(&mut self, block: &'hir Block<'hir>) {

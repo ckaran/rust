@@ -300,7 +300,7 @@ pub fn suggest_new_region_bound(
             continue;
         }
         match fn_return.kind {
-            TyKind::OpaqueDef(item_id, _) => {
+            TyKind::OpaqueDef(item_id, _, _) => {
                 let item = tcx.hir().item(item_id);
                 let ItemKind::OpaqueTy(opaque) = &item.kind else {
                     return;
@@ -544,7 +544,7 @@ pub struct TraitObjectVisitor(pub FxHashSet<DefId>);
 impl<'tcx> TypeVisitor<'tcx> for TraitObjectVisitor {
     fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
         match t.kind() {
-            ty::Dynamic(preds, re) if re.is_static() => {
+            ty::Dynamic(preds, re, _) if re.is_static() => {
                 if let Some(def_id) = preds.principal_def_id() {
                     self.0.insert(def_id);
                 }

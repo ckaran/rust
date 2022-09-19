@@ -264,6 +264,9 @@ on:
     branches:
       - "**"
 
+permissions:
+  contents: read
+
 defaults:
   run:
     # On Linux, macOS, and Windows, use the system-provided bash as the default
@@ -273,6 +276,8 @@ defaults:
 
 jobs:
   pr:
+    permissions:
+      actions: write # for rust-lang/simpleinfra/github-actions/cancel-outdated-builds
     <<: *base-ci-job
     name: PR
     env:
@@ -286,13 +291,15 @@ jobs:
 
           - name: x86_64-gnu-llvm-13
             <<: *job-linux-xl
-            
+
           - name: x86_64-gnu-tools
             env:
               CI_ONLY_WHEN_SUBMODULES_CHANGED: 1
             <<: *job-linux-xl
 
   auto:
+    permissions:
+      actions: write # for rust-lang/simpleinfra/github-actions/cancel-outdated-builds
     <<: *base-ci-job
     name: auto
     env:
@@ -676,8 +683,7 @@ jobs:
                 --enable-full-tools
                 --enable-profiler
               SCRIPT: python x.py dist
-              # RLS does not build for aarch64-pc-windows-msvc. See rust-lang/rls#1693
-              DIST_REQUIRE_ALL_TOOLS: 0
+              DIST_REQUIRE_ALL_TOOLS: 1
               # Hack around this SDK version, because it doesn't work with clang.
               # See https://github.com/rust-lang/rust/issues/88796
               WINDOWS_SDK_20348_HACK: 1
@@ -720,6 +726,8 @@ jobs:
             <<: *job-windows-xl
 
   try:
+    permissions:
+      actions: write # for rust-lang/simpleinfra/github-actions/cancel-outdated-builds
     <<: *base-ci-job
     name: try
     env:

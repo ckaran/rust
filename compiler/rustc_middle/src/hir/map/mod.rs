@@ -17,28 +17,6 @@ use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::Span;
 use rustc_target::spec::abi::Abi;
 
-fn fn_decl<'hir>(node: Node<'hir>) -> Option<&'hir FnDecl<'hir>> {
-    match node {
-        Node::Item(Item { kind: ItemKind::Fn(sig, _, _), .. })
-        | Node::TraitItem(TraitItem { kind: TraitItemKind::Fn(sig, _), .. })
-        | Node::ImplItem(ImplItem { kind: ImplItemKind::Fn(sig, _), .. }) => Some(&sig.decl),
-        Node::Expr(Expr { kind: ExprKind::Closure(Closure { fn_decl, .. }), .. })
-        | Node::ForeignItem(ForeignItem { kind: ForeignItemKind::Fn(fn_decl, ..), .. }) => {
-            Some(fn_decl)
-        }
-        _ => None,
-    }
-}
-
-pub fn fn_sig<'hir>(node: Node<'hir>) -> Option<&'hir FnSig<'hir>> {
-    match &node {
-        Node::Item(Item { kind: ItemKind::Fn(sig, _, _), .. })
-        | Node::TraitItem(TraitItem { kind: TraitItemKind::Fn(sig, _), .. })
-        | Node::ImplItem(ImplItem { kind: ImplItemKind::Fn(sig, _), .. }) => Some(sig),
-        _ => None,
-    }
-}
-
 #[inline]
 pub fn associated_body<'hir>(node: Node<'hir>) -> Option<BodyId> {
     match node {
@@ -83,7 +61,7 @@ pub struct ParentHirIterator<'hir> {
 }
 
 impl<'hir> Iterator for ParentHirIterator<'hir> {
-    type Item = (HirId, Node<'hir>);
+    type Item = HirId;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_id == CRATE_HIR_ID {
@@ -99,10 +77,7 @@ impl<'hir> Iterator for ParentHirIterator<'hir> {
             }
 
             self.current_id = parent_id;
-            if let Some(node) = self.map.find(parent_id) {
-                return Some((parent_id, node));
-            }
-            // If this `HirId` doesn't have an entry, skip it and look for its `parent_id`.
+            return Some(parent_id);
         }
     }
 }
@@ -234,7 +209,13 @@ impl<'hir> Map<'hir> {
                 ItemKind::Fn(..) => DefKind::Fn,
                 ItemKind::Macro(_, macro_kind) => DefKind::Macro(macro_kind),
                 ItemKind::Mod(..) => DefKind::Mod,
-                ItemKind::OpaqueTy(..) => DefKind::OpaqueTy,
+                ItemKind::OpaqueTy(ref opaque) => {
+                    if opaque.in_trait {
+                        DefKind::ImplTraitPlaceholder
+                    } else {
+                        DefKind::OpaqueTy
+                    }
+                }
                 ItemKind::TyAlias(..) => DefKind::TyAlias,
                 ItemKind::Enum(..) => DefKind::Enum,
                 ItemKind::Struct(..) => DefKind::Struct,
@@ -313,6 +294,9 @@ impl<'hir> Map<'hir> {
         Some(def_kind)
     }
 
+    /// Finds the id of the parent node to this one.
+    ///
+    /// If calling repeatedly and iterating over parents, prefer [`Map::parent_iter`].
     pub fn find_parent_node(self, id: HirId) -> Option<HirId> {
         if id.local_id == ItemLocalId::from_u32(0) {
             Some(self.tcx.hir_owner_parent(id.owner))
@@ -320,6 +304,8 @@ impl<'hir> Map<'hir> {
             let owner = self.tcx.hir_owner_nodes(id.owner).as_owner()?;
             let node = owner.nodes[id.local_id].as_ref()?;
             let hir_id = HirId { owner: id.owner, local_id: node.parent };
+            // HIR indexing should have checked that.
+            debug_assert_ne!(id.local_id, node.parent);
             Some(hir_id)
         }
     }
@@ -389,7 +375,7 @@ impl<'hir> Map<'hir> {
 
     pub fn fn_decl_by_hir_id(self, hir_id: HirId) -> Option<&'hir FnDecl<'hir>> {
         if let Some(node) = self.find(hir_id) {
-            fn_decl(node)
+            node.fn_decl()
         } else {
             bug!("no node for hir_id `{}`", hir_id)
         }
@@ -397,15 +383,15 @@ impl<'hir> Map<'hir> {
 
     pub fn fn_sig_by_hir_id(self, hir_id: HirId) -> Option<&'hir FnSig<'hir>> {
         if let Some(node) = self.find(hir_id) {
-            fn_sig(node)
+            node.fn_sig()
         } else {
             bug!("no node for hir_id `{}`", hir_id)
         }
     }
 
     pub fn enclosing_body_owner(self, hir_id: HirId) -> LocalDefId {
-        for (parent, _) in self.parent_iter(hir_id) {
-            if let Some(body) = self.find(parent).map(associated_body).flatten() {
+        for (_, node) in self.parent_iter(hir_id) {
+            if let Some(body) = associated_body(node) {
                 return self.body_owner_def_id(body);
             }
         }
@@ -508,7 +494,9 @@ impl<'hir> Map<'hir> {
         let def_kind = self.tcx.def_kind(def_id);
         match def_kind {
             DefKind::Trait | DefKind::TraitAlias => def_id,
-            DefKind::TyParam | DefKind::ConstParam => self.tcx.local_parent(def_id),
+            DefKind::LifetimeParam | DefKind::TyParam | DefKind::ConstParam => {
+                self.tcx.local_parent(def_id)
+            }
             _ => bug!("ty_param_owner: {:?} is a {:?} not a type parameter", def_id, def_kind),
         }
     }
@@ -517,7 +505,9 @@ impl<'hir> Map<'hir> {
         let def_kind = self.tcx.def_kind(def_id);
         match def_kind {
             DefKind::Trait | DefKind::TraitAlias => kw::SelfUpper,
-            DefKind::TyParam | DefKind::ConstParam => self.tcx.item_name(def_id.to_def_id()),
+            DefKind::LifetimeParam | DefKind::TyParam | DefKind::ConstParam => {
+                self.tcx.item_name(def_id.to_def_id())
+            }
             _ => bug!("ty_param_name: {:?} is a {:?} not a type parameter", def_id, def_kind),
         }
     }
@@ -642,8 +632,15 @@ impl<'hir> Map<'hir> {
     /// Returns an iterator for the nodes in the ancestor tree of the `current_id`
     /// until the crate root is reached. Prefer this over your own loop using `get_parent_node`.
     #[inline]
-    pub fn parent_iter(self, current_id: HirId) -> ParentHirIterator<'hir> {
+    pub fn parent_id_iter(self, current_id: HirId) -> impl Iterator<Item = HirId> + 'hir {
         ParentHirIterator { current_id, map: self }
+    }
+
+    /// Returns an iterator for the nodes in the ancestor tree of the `current_id`
+    /// until the crate root is reached. Prefer this over your own loop using `get_parent_node`.
+    #[inline]
+    pub fn parent_iter(self, current_id: HirId) -> impl Iterator<Item = (HirId, Node<'hir>)> {
+        self.parent_id_iter(current_id).filter_map(move |id| Some((id, self.find(id)?)))
     }
 
     /// Returns an iterator for the nodes in the ancestor tree of the `current_id`
@@ -1202,7 +1199,13 @@ fn hir_id_to_string(map: Map<'_>, id: HirId) -> String {
                 ItemKind::ForeignMod { .. } => "foreign mod",
                 ItemKind::GlobalAsm(..) => "global asm",
                 ItemKind::TyAlias(..) => "ty",
-                ItemKind::OpaqueTy(..) => "opaque type",
+                ItemKind::OpaqueTy(ref opaque) => {
+                    if opaque.in_trait {
+                        "opaque type in trait"
+                    } else {
+                        "opaque type"
+                    }
+                }
                 ItemKind::Enum(..) => "enum",
                 ItemKind::Struct(..) => "struct",
                 ItemKind::Union(..) => "union",

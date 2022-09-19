@@ -20,6 +20,7 @@ const LICENSES: &[&str] = &[
     "Unlicense OR MIT",
     "0BSD OR MIT OR Apache-2.0", // adler license
     "Zlib OR Apache-2.0 OR MIT", // tinyvec
+    "MIT OR Apache-2.0 OR Zlib", // tinyvec_macros
     "MIT OR Zlib OR Apache-2.0", // miniz_oxide
 ];
 
@@ -31,8 +32,7 @@ const EXCEPTIONS: &[(&str, &str)] = &[
     ("mdbook", "MPL-2.0"),            // mdbook
     ("openssl", "Apache-2.0"),        // cargo, mdbook
     ("colored", "MPL-2.0"),           // rustfmt
-    ("ordslice", "Apache-2.0"),       // rls
-    ("ryu", "Apache-2.0 OR BSL-1.0"), // rls/cargo/... (because of serde)
+    ("ryu", "Apache-2.0 OR BSL-1.0"), // cargo/... (because of serde)
     ("bytesize", "Apache-2.0"),       // cargo
     ("im-rc", "MPL-2.0+"),            // cargo
     ("sized-chunks", "MPL-2.0+"),     // cargo via im-rc
@@ -92,9 +92,6 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "autocfg",
     "bitflags",
     "block-buffer",
-    "block-padding",
-    "byte-tools",
-    "byteorder",
     "cc",
     "cfg-if",
     "chalk-derive",
@@ -119,7 +116,6 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "ena",
     "env_logger",
     "expect-test",
-    "fake-simd",
     "fallible-iterator", // dependency of `thorin`
     "filetime",
     "fixedbitset",
@@ -163,7 +159,6 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "object",
     "odht",
     "once_cell",
-    "opaque-debug",
     "parking_lot",
     "parking_lot_core",
     "pathdiff",
@@ -224,6 +219,8 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "time",
     "tinystr",
     "tinyvec",
+    "tinyvec_macros",
+    "thin-vec",
     "tracing",
     "tracing-attributes",
     "tracing-core",
@@ -247,6 +244,7 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "unicode-width",
     "unicode-xid",
     "vcpkg",
+    "valuable",
     "version_check",
     "wasi",
     "winapi",
